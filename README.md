@@ -223,12 +223,11 @@ Heuristic disclosure and communication checks are intentionally inspectable, not
 privacy guarantees. The scripted customer can end even after a failed action; the grader,
 not satisfaction text, determines credit.
 
-The [portfolio collection](https://chimeraforge.vercel.app/work) has a separately authored
-browser adaptation. Its [customer-service demo PR59](https://github.com/Sahil170595/Banterblogs/pull/59)
-is pending merge at release time. That edition exposes manual agent controls, synthetic
-state changes and reward breakdowns; it does not expose the complete two-model runner,
-custom Python protocol, provider adapter or this full evaluation architecture. No deployment
-of that PR is claimed here.
+A separately authored [browser demo](https://chimeraforge.vercel.app/projects/reinforcement-learning/customer-service)
+scores scripted control trajectories and lets you operate the tools by hand, with synthetic
+state changes and reward breakdowns. It does not expose the complete two-model runner,
+custom Python protocol, provider adapter or this full evaluation architecture, and its
+rubric is not on this evaluator's scale.
 
 ## License And Data
 
