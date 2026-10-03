@@ -317,6 +317,36 @@ def _check_catalogue(state: DatabaseState, skus: set[str]) -> None:
             )
 
 
+def _check_order_children(state: DatabaseState, order: Order) -> None:
+    for field, ids, target in (
+        ("item_ids", order.item_ids, state.order_items),
+        ("payment_ids", order.payment_ids, state.payments),
+        ("shipment_ids", order.shipment_ids, state.shipments),
+    ):
+        if len(set(ids)) != len(ids):
+            raise ReferentialIntegrityError("orders", order.id, field, "contains a duplicate id")
+        for reference in ids:
+            child = target.get(reference)
+            if child is None:
+                raise ReferentialIntegrityError("orders", order.id, field, f"unknown reference {reference!r}")
+            if child.id != reference or child.order_id != order.id:
+                raise ReferentialIntegrityError(
+                    "orders",
+                    order.id,
+                    field,
+                    f"reference {reference!r} identifies {child.id!r}, which belongs to order {child.order_id!r}, not {order.id!r}",
+                )
+            if field == "payment_ids" and child.user_id != order.user_id:
+                raise ReferentialIntegrityError(
+                    "payments",
+                    child.id,
+                    "user_id",
+                    f"payer {child.user_id!r} is not order owner {order.user_id!r}",
+                )
+            if field == "shipment_ids":
+                _check_shipment_items(state, child)
+
+
 def _check_orders(state: DatabaseState) -> None:
     for order in state.orders.values():
         if order.user_id not in state.users:
@@ -325,18 +355,7 @@ def _check_orders(state: DatabaseState) -> None:
             raise ReferentialIntegrityError(
                 "orders", order.id, "total_cents", f"negative total {order.total_cents}"
             )
-        for field, ids, target in (
-            ("item_ids", order.item_ids, state.order_items),
-            ("payment_ids", order.payment_ids, state.payments),
-            ("shipment_ids", order.shipment_ids, state.shipments),
-        ):
-            if len(set(ids)) != len(ids):
-                raise ReferentialIntegrityError("orders", order.id, field, "contains a duplicate id")
-            for reference in ids:
-                if reference not in target:
-                    raise ReferentialIntegrityError(
-                        "orders", order.id, field, f"unknown reference {reference!r}"
-                    )
+        _check_order_children(state, order)
 
 
 def _check_order_items(state: DatabaseState, skus: set[str]) -> None:
@@ -391,6 +410,20 @@ def _check_payments(state: DatabaseState) -> None:
             )
 
 
+def _check_shipment_items(state: DatabaseState, shipment: Shipment) -> None:
+    for item_id in shipment.item_ids:
+        item = state.order_items.get(item_id)
+        if item is None:
+            raise ReferentialIntegrityError("shipments", shipment.id, "item_ids", f"unknown item {item_id!r}")
+        if item.order_id != shipment.order_id:
+            raise ReferentialIntegrityError(
+                "shipments",
+                shipment.id,
+                "item_ids",
+                f"item {item_id!r} belongs to order {item.order_id!r}",
+            )
+
+
 def _check_shipments(state: DatabaseState) -> None:
     for shipment in state.shipments.values():
         order = state.orders.get(shipment.order_id)
@@ -402,19 +435,7 @@ def _check_shipments(state: DatabaseState) -> None:
             raise ReferentialIntegrityError(
                 "shipments", shipment.id, "order_id", f"order {order.id!r} does not list this shipment"
             )
-        for item_id in shipment.item_ids:
-            item = state.order_items.get(item_id)
-            if item is None:
-                raise ReferentialIntegrityError(
-                    "shipments", shipment.id, "item_ids", f"unknown item {item_id!r}"
-                )
-            if item.order_id != shipment.order_id:
-                raise ReferentialIntegrityError(
-                    "shipments",
-                    shipment.id,
-                    "item_ids",
-                    f"item {item_id!r} belongs to order {item.order_id!r}",
-                )
+        _check_shipment_items(state, shipment)
 
 
 def _check_returns(state: DatabaseState) -> None:
@@ -609,7 +630,9 @@ class CustomerServiceDB:
         of a task, so a shallow copy would let episode N's refund appear in episode N+1's
         starting world and silently invalidate the reward.
         """
-        self._state = state.model_copy(deep=True)
+        candidate = state.model_copy(deep=True)
+        check_referential_integrity(candidate)
+        self._state = candidate
         self._id_counters = {}
         self._idempotency_ledger = {}
         self._initial_snapshot = StateSnapshot.capture(INITIAL_SNAPSHOT_LABEL, self._state)
@@ -733,7 +756,9 @@ class CustomerServiceDB:
         order = self._state.orders.get(order_id)
         if order is None:
             return []
-        return [table[child_id] for child_id in getattr(order, field) if child_id in table]
+        # Worlds are mutable after reset; validate the whole parent before exposing any child.
+        _check_order_children(self._state, order)
+        return [table[child_id] for child_id in getattr(order, field)]
 
     # -- idempotency ledger ------------------------------------------------------------
 
